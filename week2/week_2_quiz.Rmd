@@ -1,0 +1,106 @@
+---
+title: "week 2 quiz"
+author: "Haixu Leng"
+date: "5/29/2021"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**1**. Consider the simple linear regression model $Y = 10 + 5x + \epsilon$ where $\epsilon \sim N(0, \sigma^2 = 16)$. Calculate the probability that Y is less than 6 given $x = 0$.
+
+```{r}
+y_mean = 10 + 5 * 0
+pnorm(6, mean = y_mean, sd = 4)
+```
+
+
+**2**. what is the probability that Y is greater than 3 given that x = -1?
+
+```{r}
+y_mean = 10 + 5 * -1
+pnorm(3, mean = y_mean, sd = 4, lower.tail = FALSE)
+```
+
+**3**. what is the probability that Y is greater than 3 given that x = -2?
+
+```{r}
+y_mean = 10 + 5 * -2
+pnorm(3, mean = y_mean, sd = 4, lower.tail = FALSE)
+```
+
+**4**. Suppose we would like to predict the duration of an eruption of the Old Faithful geyser in Yellowstone National Park based on the waiting time before an eruption. Fit a simple linear model in R that accomplishes this task.
+
+```{r}
+result = lm(eruptions~waiting, data = faithful)
+coefficients(result)
+```
+
+**6** Use the fitted model to predict the duration of an eruption based on a waiting time of 80 minutes. 
+```{r}
+coefficients(result)[[1]] + coefficients(result)[[2]] * 80
+```
+
+
+Answer: `r coefficients(result)[[1]] + coefficients(result)[[2]] * 80` mins.
+
+**7** Use the fitted model to predict the duration of an eruption based on a waiting time of 120 minutes. 
+```{r}
+coefficients(result)[[1]] + coefficients(result)[[2]] * 120
+```
+
+
+Answer: `r coefficients(result)[[1]] + coefficients(result)[[2]] * 120` mins.
+
+**8**. Of the predictions that you made for 80 and 120 minutes, which is more reliable?
+```{r}
+plot(eruptions ~ waiting, data = faithful,
+     xlab = "Waiting Time (mins)",
+     ylab = "Eruption Time (mins)",
+     main = "Eruption Time vs Waiting Time",
+     pch = 20,
+     cex = 2,
+     col = "gray")
+abline(result, lwd = 3, col = "darkorange")
+```
+
+Answer: I think the prediction on 80 minutes waiting time is more reliable, because we don't have data that waits 120 minutes.
+
+**9**.   Calculate the RSS for the fitted model.
+
+$RSS = \sum\limits_{i=1}^n (y_i - \hat y)^2$
+
+```{r}
+y_i = faithful$eruptions
+y_hat = coefficients(result)[[1]] + coefficients(result)[[2]] * faithful$waiting
+RSS = sum((y_i - y_hat)^2)
+```
+Answer: `r RSS`.
+
+**10**. What proportion of the variation in eruption duration is explained by the linear relationship with waiting time?
+
+$SST = \sum\limits_{i=1}^n (y_i - \bar y)^2$
+
+$R^2 = \frac{SST - RSS}{SST}$
+
+```{r}
+y_mean = mean(y_i)
+SST = sum((y_i - y_mean)^2)
+(SST - RSS) / SST
+```
+
+**11**. Calculate the standard deviation of the residuals of the fitted model. 
+
+```{r}
+# manual calculation
+e = y_i - y_hat
+n = length(e)
+s2_e = sum(e^2) / (n - 2)
+sqrt(s2_e)
+
+# get the result from the summary
+summary(result)
+```
+
