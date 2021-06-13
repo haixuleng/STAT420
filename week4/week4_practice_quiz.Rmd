@@ -1,0 +1,44 @@
+---
+title: "Week 4 practice quiz"
+author: "Haixu Leng"
+date: "6/12/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**Q1:** Consider a random variable $X$ that has an $F$ distribution with 33 and 55 degrees of freedom. Calculate $P[X > 2.7]$.
+
+**A:**
+
+```{r}
+pf(2.7, 3, 5, lower.tail = FALSE)
+```
+
+**Q2:** For Questions 2-5, use the built-in longley dataset in R. Fit a multiple linear regression model with Employed as the response. Use three predictors: GNP, Population, and Armed.Forces. Specifically,
+
+\[
+Y = \beta_0 + \beta_1 x_1 + \beta_2 x_2 + \beta_3 x_3 + \epsilon
+\]
+
+where
+
+-$x_1$ is GNP
+
+-$x_2$ is Population
+
+-$x_3$ is Armed.Forces
+
+**A:**
+
+```{r}
+longley_model = lm(Employed ~ GNP + Population + Armed.Forces, data = longley)
+
+confint(longley_model, parm = "GNP", level = 0.9)
+summary(longley_model)$coef["Population", "Std. Error"]
+summary(longley_model)$coef["Armed.Forces", "Pr(>|t|)"]
+summary(longley_model)$fstatistic[[1]]
+```
+
