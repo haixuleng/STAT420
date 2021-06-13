@@ -1,0 +1,69 @@
+---
+title: "Week 1 practice quiz"
+author: "Haixu Leng"
+date: "5/19/2021"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1. $x=1:100$, find the value of $\sum\limits_{i}^n ln(x_{i})$
+
+```{r cars}
+x = c(1:100)
+y = sum(log(x))
+
+```
+The result is equal to `r y`.
+
+## 2. How many of the elements of a_vector are greater than or equal to 5?
+
+     set.seed(42)
+     a_vector = rpois(250, lambda = 6)
+
+```{r}
+set.seed(42)
+a_vector = rpois(250, lambda = 6)
+n = length(a_vector[a_vector >= 5])
+```
+There are `r n` elements in `a_vector` that are greater than or equal to 5.
+
+## 3. Create a new vector **y**, which adds 5 to the elements stored in odd indices of **x** and subtracts 10 from the elements stored in even indices of **x**. Calculate the standard deviation of this new vector.
+
+```{r}
+x = 1:100
+odd_vector = rep(c(1,0), length(x) / 2)
+even_vector = rep(c(0,1), length(x) / 2)
+y = x + 5 * odd_vector - 10 * even_vector
+```
+Result: `r sd(y)`.
+
+## 4. Which of the following options would return the third element of the list quiz_list? (Select all that apply.)
+```{r echo=TRUE}
+quiz_list = list(
+  x = c(1, 2),
+  y = "Hello Quiz Taker",
+  z = "zz"
+)
+
+quiz_list[3]
+quiz_list[[3]]
+quiz_list["3"] # does not work
+quiz_list$z
+#quiz_list$3 does not work
+```
+
+## 5. Create a histogram of age in the Melanoma dataset from the MASS package. How would you describe this data?
+```{r include=FALSE}
+library(MASS)
+MASS::Melanoma
+```
+```{r}
+hist(Melanoma$age)
+hist(rchisq(1500, df = 5), breaks = 20) # example of a right skewed data
+```
+
+
+
