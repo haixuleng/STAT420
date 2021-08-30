@@ -1,0 +1,695 @@
+---
+title: 'Final Project: Energy Consumption Model of Appliances'
+author: "RandomGroup54"
+date: "8/8/2021"
+output:
+  html_document: 
+    theme: readable
+    toc: yes
+  pdf_document: default
+urlcolor: cyan
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Intro
+
+**Data Background:**
+
+The dataset that was used for this project was collected at a house in Belgium and at a nearby weather station ([link to dataset](https://www.kaggle.com/loveall/appliances-energy-prediction)). The motivation for data collection was to better understand appliance energy consumption. Appliance and light energy usage was measured every 10 minutes, as well as the temperature and humidity at 9 different locations in the home. Data from a nearby weather station was merged with the data from the Belgian house. The collected weather station data are outside temperature, humidity, windspeed, visibility, dew point temperature, and pressure. The weather station data was only collected every hour. Since the house data was collected every 10 minutes, the weather station data was interpolated between hours. The goal of this project is to predict appliance energy consumption with the house and weather station data. 
+
+**Data Metrics:**
+
+There are a total of 26 different variables can be used to predict the appliance energy consumption. The variables are:
+-`T1`, `RH_1` .... `T9`, `RH_9` - 18 total inside temperature and humidity sensors 
+-`Lights` - energy consumption of lights in the home
+-`T_out`, `RH_out` - outside temperature and humidity from weather station
+-`Windspeed`, `Visibility`, `Tdewpoint`, `Press_mm_hg`- additional weather station data
+-`date` - time when data was collected. We use this variable to extract the time of the day and whether it was a weekday and weekend. 
+
+There are a total of 19,735 observations.
+
+**Motivation:**
+
+Appliance energy consumption comprises a large part of worldwide electricity demand, and is also a key factor indicator for standard of living. Appliance energy consumption will continue to increase as the worldwide standard of living increases. Predicting the amount of electricity consumed is a key part in building the necessary infrastructure to supply electricity. Prediction of house appliance energy consumption can be used by electricity suppliers for predictive control, which is an essential part of optimizing electricity generation. Electricity generation comprises a large part of green-house gas emissions, so any improved optimization in electricity generation will help to reduce GHG emissions. Multiple members of the group analyzing this dataset work in the energy industry, so there is a vested interest in studying the subject.
+
+## Methods
+
+**Data Parsing:**
+
+Load in the raw data.
+
+```{r, message=FALSE}
+library(readr)
+data = read_csv("KAG_energydata_complete.csv")
+str(data)
+```
+
+First, we have to manipulate the data to something more usable. 
+
+Partition the hour portion of the `date` data into four different times of day.
+
+```{r, message=FALSE}
+library(lubridate)
+tmp = ymd_hms(data$date)
+breaks = hour(hm("00:00", "6:00", "12:00", "18:00", "23.59"))
+labels = c("Night", "Morning", "Afternoon", "Evening")
+
+data$Time_of_day = cut(x = hour(tmp), breaks = breaks, labels = labels, include.lowest=TRUE)
+sample(data$Time_of_day, 10)
+```
+
+Partition the date portion of the `date` data into weekday and weekends and then coerce the partitions into factor variables.
+
+```{r}
+data$part_of_week = ifelse(weekdays(data$date) == "Saturday" | weekdays(data$date) == "Sunday", 
+"Weekend", "Weekday")
+
+data$part_of_week = as.factor(data$part_of_week)
+```
+
+Now that we have parsed all relevant information, we can delete the `date` column along with two variables that are irrelevant.
+
+```{r}
+data = subset(data, select = -c(rv1, rv2, date))
+head(data)
+```
+
+Split the data into testing and training groups.
+
+```{r}
+x = nrow(data)
+ratio = 0.7
+
+ids = sample(x, size = trunc(x * ratio))
+
+data_trn = data[ids, ]
+data_tst = data[-ids, ]
+```
+
+**Correlation:**
+
+```{r}
+full = lm(Appliances ~ ., data = data_trn)
+faraway::vif(full)
+```
+
+Fitting a full additive model tells us we have some correlation issues.
+
+```{r}
+pairs(head(data[,seq(5, 14)], 3000))
+```
+
+```{r}
+pairs(head(data[,seq(15, 25)], 3000))
+```
+
+The graphs above confirm the correlation suspicions.
+
+```{r}
+abs(cor(data[, seq(5, 14)]) > 0.7)
+```
+
+```{r}
+abs(cor(data[, seq(15, 25)]) > 0.7)
+```
+
+The humidities and temperatures have a lot of highly correlated predictors, so will not be using all of them in the future models.
+
+**Transformation of Response:**
+
+The below histograms show the motivation for transforming the response variable `Appliances`. The histogram of `Appliances` is skewed to the right, however, the histogram of the `log(Appliances)` is much closer to normal. This transformation greatly improved the model.
+
+```{r, message=FALSE}
+library(gridExtra)
+library(ggplot2)
+g1 = ggplot(data=data, aes(Appliances)) + 
+  geom_histogram(aes(y =..density..), 
+                 binwidth = 10,
+                 col="red", 
+                 fill="blue", 
+                 alpha=.2) + 
+  geom_density(col=2) + 
+  labs(title="Histogram for Appliances", x="Appliances", y="Density")
+g2 = ggplot(data=data, aes(log(Appliances))) + 
+  geom_histogram(aes(y =..density..), 
+                 binwidth = .1,
+                 col="red", 
+                 fill="blue", 
+                 alpha=.2) + 
+  geom_density(col=2) + 
+  labs(title="Histogram for log(Appliances)", x="Appliances", y="Density")
+grid.arrange(g1, g2, ncol = 2)     
+```
+
+**Outliers:**
+
+Nearly 8% of the Appliance data were outliers. These outliers were impossible to predict using multiple linear regression. Below is a box plot of the Appliance variable.
+
+```{r}
+ggplot(data, aes(x=Appliances)) + geom_boxplot() +
+  labs(x = "Appliances") +
+  ggtitle("Boxplot of Appliances")
+```
+
+From the boxplot, it is clear that our data has a significant number of outliers. These must have been times when most, if not all, appliances in the household were in use or there was abnormal energy consumption with a specific appliance. We decided we needed to remove outlier observations in the training of our model. Specifically, we removed observations that had a Cook’s Distance of > $4/n$. This helped to improve the $R^2$ of the model.
+
+**Reframing our Approach:**
+
+Plenty of models were fit using the assumptions above; however, a big breakthrough happened when we reassessed our factor variables. Instead of `Time_of_day`, using the hour as a factor variable gave a better result. Additionally, individual days were turned into variables rather than using the weekday / weekend split.
+
+Load the raw data.
+
+```{r}
+data_raw = read.csv("KAG_energydata_complete.csv")
+```
+
+Partition the hour portion of the `date` data into the twenty-four hours of a day and coerce the partitions into a factor variable.
+
+```{r}
+n = length(data_raw[,1])
+hour = rep(0, n)
+for(i in 1:n){
+  temp = strsplit(data_raw[i, 1], " ")[[1]][2]
+  hour[i] = strsplit(temp, ":")[[1]][1]
+data_raw$hour = as.factor(hour)
+}
+```
+
+Partition the date portion of the `date` data into weekday and weekends and then coerce the partitions into factor variables.
+
+```{r}
+data_raw$day = weekdays(as.Date(data_raw$date))
+```
+
+Now that we have parsed all relevant information, we can delete the `date` column along with two variables that are irrelevant.
+
+```{r}
+data_raw = subset(data_raw, select = -c(date, rv1, rv2))
+data_raw = na.omit(data_raw)
+```
+
+Split the data into testing and training groups.
+
+```{r}
+dt = sort(sample(nrow(data_raw), nrow(data_raw) * 0.7))
+train = data_raw[dt,]
+test = data_raw[-dt,]
+
+train_small = train
+```
+
+**Analysis of New Factor Variables:**
+
+```{r eval=FALSE, include=FALSE}
+install.packages("ggplot2")
+install.packages("GGally")
+```
+
+```{r, message=FALSE, warning=FALSE}
+library("GGally")
+ggpairs(train_small, columns = c(1,27,28), cardinality_threshold = 24)
+```
+
+The factor variables, like `part of week` and `hour` seem to have a significant effect on the response
+
+**An Additive Model:**
+
+Starting again from a full additive model:
+
+```{r}
+add_md = lm(Appliances ~ ., data = train_small)
+summary(add_md)
+```
+
+The $R^2$ value is only 0.26, which is low. But from this exercise, we found a few predictors with potential significance:
+
+  - `Lights`, `RH_1` (or any RH), `T_OUT` (or any T), `hour`, and `day`.
+  
+  - Since all the humidity parameters are highly correlated. I will start with only one of them, such as `RH_1`. The same logic is true for `T_OUT`.
+  
+  - These predictors will be used in the next step.
+  
+**Re-examine the Scatter Plot:**
+
+```{r, warning=FALSE, message=FALSE}
+ggpairs(train_small[, c(1, 2, 4, 21, 27, 28)], cardinality_threshold = 24)
+```
+
+**Transformation of the Response:**
+
+As described above, taking the log of the response greatly improves the normality; therefore, we will explore models using the log of the response.
+
+**Temperature vs Humidity:**
+
+```{r}
+summary(lm(log(Appliances) ~ RH_1, data = train_small))$r.squared
+summary(lm(log(Appliances) ~ T_out, data = train_small))$r.squared
+```
+
+Since the $R^2$ is much higher for temperature than humidity, we will start our model will `T_out` as our first predictor.
+
+**Hour:**
+
+```{r}
+boxplot(Appliances ~ hour, data = train_small)
+summary(lm(log(Appliances) ~ hour, data = train_small))$r.squared
+summary(lm(log(Appliances) ~ T_out + hour, data = train_small))$r.squared
+summary(lm(log(Appliances) ~ T_out * hour, data = train_small))$r.squared
+```
+
+For predictor `hour`, we can see that the appliances will use little energy in the range from 0 to 6 and 23; however, there are large variances for energy consumption during the other hours.
+
+Adding `hour` has a more significant effect on the $R^2$ than `T_out`; therefore, it is a better predictor and we will include it in the model.
+
+**Day:**
+
+```{r}
+boxplot(Appliances ~ day, data = train_small)
+summary(lm(log(Appliances) ~ day, data = train_small))$r.squared
+summary(lm(log(Appliances) ~ T_out + day, data = train_small))$r.squared
+summary(lm(log(Appliances) ~ T_out * day, data = train_small))$r.squared
+```
+
+`Appliances` is uniform between `days`, which explains why `days` describes a small portion of the response.
+
+**Lights:**
+
+```{r}
+plot(train_small$lights, log(train_small$Appliances),
+     xlab = "Lights",
+     ylab = "log(Appliances)")
+
+summary(lm(log(Appliances) ~ T_out, data = train_small))$r.squared
+summary(lm(log(Appliances) ~ T_out + lights, data = train_small))$coef["lights", "Pr(>|t|)"]
+summary(lm(log(Appliances) ~ T_out * lights, data = train_small))$coef["lights", "Pr(>|t|)"]
+```
+
+For predictor `lights`, there is no clear linear relationship from the plot. The $R^2$ is only `r round(summary(lm(log(Appliances) ~ lights, data = train_small))$r.squared, 2)`, but the coefficient is statistically significant from the T test.
+
+**Additive Model:**
+
+```{r}
+add_md_key = lm(log(Appliances) ~ T_out + RH_1 + hour + lights +day, data = train_small)
+summary(add_md_key)$r.squared
+```
+
+With 5 predictors and a log transformation, the $R^2$ is still `r summary(add_md_key)$r.squared`. We can try to add interaction terms.
+
+**Interaction Model:**
+
+```{r}
+int_md_key = lm(log(Appliances) ~ T_out * RH_1 * hour * lights * day, data = train_small)
+
+summary(int_md_key)$r.squared
+length(int_md_key$coef)
+```
+
+With the interaction term added, the $R^2$ significantly increases. However, the model may be overfitting the data with `r length(int_md_key$coef)` predictors. 
+
+**Transformation Model:**
+
+```{r}
+sqr_md_key = lm(log(Appliances) ~ poly(T_out,2) + hour + poly(RH_1,2) + poly(lights, 2) + day, data = train_small)
+summary(sqr_md_key)$r.squared
+summary(add_md_key)$r.squared
+```
+
+Almost no improvement on $R^2$, so it's likely the 2nd order terms won't help us.
+
+**Backward AIC Model:**
+
+```{r}
+int_md_key_aic = step(int_md_key, trace = 0)
+# R^2
+summary(int_md_key)$r.squared
+summary(int_md_key_aic)$r.squared
+# number of predictors
+length(summary(int_md_key)$coefficients[,1])
+length(summary(int_md_key_aic)$coefficients[,1])
+
+```
+
+AIC does not reduce the number of predictors used in the interaction model. As a result, we can ignore the AIC model.
+
+**Backward BIC Model:**
+
+```{r}
+int_md_key_bic = step(int_md_key, trace = 0, k = log(length(resid(int_md_key))))
+# R^2
+summary(int_md_key)$r.squared
+summary(int_md_key_bic)$r.squared
+# number of predictors
+length(summary(int_md_key)$coefficients[,1])
+length(summary(int_md_key_bic)$coefficients[,1]) 
+```
+
+The number of predictors greatly reduces after running backward BIC. However, the $R^2$ also drops significantly.
+
+**Box-Cox Test:**
+
+This test is to see whether our choice of `log(Appliances)` is justified.
+
+```{r, message=FALSE}
+library(MASS)
+library(faraway)
+boxcox(add_md_key, lambda = seq(-1.5, -0, by = 0.05), plotit = TRUE)
+```
+
+The parameter $\lambda$ is found to be around -1, so we will try and fit a model using this response transformation.
+
+```{r}
+int_md_key_boxcox = lm((Appliances^(-1) - 1)/(-1) ~ T_out * RH_1 * hour * lights * day, data = train_small)
+# R^2
+summary(int_md_key)$r.squared
+summary(int_md_key_boxcox)$r.squared
+# Adjusted R^2
+summary(int_md_key)$adj.r.squared
+summary(int_md_key_boxcox)$adj.r.squared
+```
+
+As shown above, after the Box-Cox transformation, the adjusted $R^2$ lowered. So, we will keep the log transformation of the response.
+
+**Transformation of the Predictors:**
+
+We have shown that the 2nd order terms do not help our model. What if we do log transformation on numeric predictors?
+
+```{r}
+int_md_key_log = lm(log(Appliances) ~ log(T_out + 10) * RH_1 * hour * lights * day, data = train_small)
+summary(int_md_key)$r.squared
+summary(int_md_key_log)$r.squared
+summary(int_md_key)$adj.r.squared
+summary(int_md_key_log)$adj.r.squared
+```
+
+Only modest change is seen after taking the log on `T_out`. Note that since the temperature can get below 0 degrees, so we offset the temperature by adding a constant number to avoid negative values.
+
+```{r}
+int_md_key_log = lm(log(Appliances) ~ T_out * log(RH_1) * hour * lights * day, data = train_small)
+summary(int_md_key)$r.squared
+summary(int_md_key_log)$r.squared
+summary(int_md_key)$adj.r.squared
+summary(int_md_key_log)$adj.r.squared
+```
+
+Taking the log on `RH_1` makes the model slightly worse. We confirm that taking log on temperature and humidity predictors will not make a significant impact on our model.
+
+**Attempted Models:**
+
+```{r, warning=FALSE, message = FALSE}
+rmse = function(model, data, log = FALSE){
+  if(log){
+    residuals = data$Appliances - exp(predict(model, newdata = data))
+    sqrt(sum((residuals)^2) / length(residuals)) 
+  }
+  else{
+    residuals = data$Appliances - predict(model, newdata = data)
+    sqrt(sum((residuals)^2) / length(residuals))
+  }
+}
+
+# An additive model
+rmse(add_md, train, log = FALSE)
+rmse(add_md, test, log = FALSE)
+
+# An additive model with key parameters
+rmse(add_md_key, train, log = FALSE)
+rmse(add_md_key, test, log = FALSE)
+
+# An interaction model with key parameters
+rmse(int_md_key, train, log = TRUE)
+rmse(int_md_key, test, log = TRUE)
+
+# An interaction model with backward BIC
+rmse(int_md_key_bic, train, log = TRUE)
+rmse(int_md_key_bic, test, log = TRUE)
+
+# An interaction model with all possible two way interactions
+int_md_2_way = lm(log(Appliances)  ~ . ^ 2, train_small)
+rmse(int_md_2_way, train_small, log = TRUE)
+rmse(int_md_2_way, test, log = TRUE)
+
+```
+
+From the comparison we can see that the additive model did the best, even though we used all the predictors. When we only use the key parameters the model can get worse.
+
+The interaction model with all the key parameters is not stable when we used it to predict values. The reduced model using BIC has similar error comparing to the additive model. This result may suggest that the non-significant predictors may actually be useful.
+
+**Expand the Key Parameter List:**
+
+Let's remove parameters rather than adding them.
+
+```{r}
+int_md_exp01 = lm(log(Appliances) ~ (T_out + RH_out + RH_1 + T1 + RH_2 + T2 + RH_3 + T3 + RH_4 + T4 + RH_5 + T5 + RH_6 + T6 + RH_7 + T7 +RH_8 + T8 + RH_9 + T9) * hour + day + lights + Windspeed + Visibility + Tdewpoint, data = train_small)
+model = int_md_exp01
+
+rmse(model, train, log = TRUE)
+rmse(model, test, log = TRUE)
+```
+
+**Remove High Influence Points:**
+
+```{r}
+model = int_md_exp01
+low_infl_points = cooks.distance(model) < 4 / length(cooks.distance(model))
+fix_train = subset(train_small, low_infl_points)
+
+int_md_exp01_fix = lm(log(Appliances) ~ (T_out + RH_out + RH_1 + T1 + RH_2 + T2 + RH_3 + T3 + RH_4 + T4 + RH_5 + T5 + RH_6 + T6 + RH_7 + T7 +RH_8 + T8 + RH_9 + T9) * hour + day + lights + Windspeed + Visibility + Tdewpoint, data = fix_train)
+model = int_md_exp01_fix
+rmse(model, fix_train, log = TRUE)
+
+int_md_key_fix = lm(log(Appliances) ~ T_out * RH_1 * hour * lights * day, data = fix_train)
+int_md_key_bic_fix = step(int_md_key_fix, trace = 0, k = log(length(resid(int_md_key_fix))))
+model = int_md_key_bic_fix
+rmse(model, fix_train, log = TRUE)
+```
+
+With the high influence data points removed, the `RMSE` reduces significantly.
+
+## Results
+
+We will plot the Fitted vs Residual plot and the Q-Q plot to examine the candidate models. 
+
+**Additive Model:**
+
+```{r}
+pcol = "grey"
+lcol = "dodgerblue"
+
+par(mfrow = c(1, 2))
+# Fitted vs Residuals plot
+model = add_md
+plot(fitted(model), resid(model), 
+     col = pcol,
+     pch = 20,
+     xlab = "Fitted",
+     ylab = "Residuals",
+     main = "Fitted versus Residuals")
+abline(h = 0, col = lcol, lwd = 2)
+
+# Normal Q-Q plot
+qqnorm(resid(model), main = "Normal Q-Q Plot", col = pcol)
+qqline(resid(model), col = lcol, lwd = 2)
+```
+
+From the Fitted vs Residuals plot, we can see that the linearity assumption seems to be violated as the residuals are not spread in a roughly even manner around the Y = 0 line. The constant variance assumption looks violated as the spread of the residuals do not appear to be the same for all points on the fitted line. From the normal Q-Q plot, the data does not seem to have been sampled from a normal distribution as the plotted points are far away from the line for higher quantiles.
+
+**Additive Model with Key Parameters:**
+
+```{r}
+par(mfrow = c(1, 2))
+model = add_md_key
+plot(fitted(model), resid(model), 
+     col = pcol, 
+     pch = 20,
+     xlab = "Fitted",
+     ylab = "Residuals",
+     main = "Fitted versus Residuals")
+abline(h = 0, col = lcol, lwd = 2)
+
+qqnorm(resid(model), main = "Normal Q-Q Plot", col = pcol)
+qqline(resid(model), col = lcol, lwd = 2)
+```
+
+The linearity, constant variance and normality assumptions seem to be violated here as well. However, we can see that the Fitted vs Residuals plot is looking better as the residuals seem to start to cluster around the fitted line. This suggests that is an improvement over the previous model. 
+
+**Interaction Model with Key Parameters:**
+
+```{r}
+par(mfrow = c(1, 2))
+model = int_md_key
+plot(fitted(model), resid(model), 
+     col = pcol, 
+     pch = 20,
+     xlab = "Fitted",
+     ylab = "Residuals",
+     main = "Fitted versus Residuals")
+abline(h = 0, col = lcol, lwd = 2)
+
+qqnorm(resid(model), main = "Normal Q-Q Plot", col = pcol)
+qqline(resid(model), col = lcol, lwd = 2)
+```
+
+From the fitted vs residuals plot, we can see that the fitted points have started to cluster more around the fitted line although the variance is still not constant.
+
+**Interaction Model with Key Parameters:**
+
+```{r}
+par(mfrow = c(1, 2))
+model = int_md_key_bic
+plot(fitted(model), resid(model), 
+     col = pcol, 
+     pch = 20,
+     xlab = "Fitted",
+     ylab = "Residuals",
+     main = "Fitted versus Residuals")
+abline(h = 0, col = lcol, lwd = 2)
+
+qqnorm(resid(model), main = "Normal Q-Q Plot", col = pcol)
+qqline(resid(model), col = lcol, lwd = 2)
+```
+
+We do not see any remarkable improvement in the fitted vs residuals plot compared to the previous model. The Q-Q plot seems to be flattening; although, higher values still cannot be explained by the model.
+
+**Model with all Possible Two Way Interactions:**
+
+```{r, warning=FALSE, message=FALSE}
+par(mfrow = c(1, 2))
+model = int_md_2_way
+plot(fitted(model), resid(model), 
+     col = pcol, 
+     pch = 20,
+     xlab = "Fitted",
+     ylab = "Residuals",
+     main = "Fitted versus Residuals")
+abline(h = 0, col = lcol, lwd = 2)
+
+qqnorm(resid(model), main = "Normal Q-Q Plot", col = pcol)
+qqline(resid(model), col = lcol, lwd = 2)
+
+```
+
+This model has a very high number of parameters due to the interaction terms, but it still does not seem to be a significant upgrade on the previous models.
+
+**Comparing all Models:**
+
+The following function will compute performance metrics for our shortlisted models.
+
+```{r, message=FALSE, warning=FALSE}
+library(lmtest)
+
+# Create empty dataframe for storing results
+metrics_df =  data.frame(ModelName = character(),
+                         AdjRSq = double(),
+                         LOOCVRMSE = double(),
+                         TrainRMSE = double(),
+                         TestRMSE = double(),
+                         ParCount = integer(),
+                         ShapiroPVal = double(),
+                         BPPval = double()
+)
+
+calculate_metrics = function(model, train_data, test_data, model_name, log = FALSE, alpha = 0.01){
+
+  if(log){
+    train_rmse = sqrt(mean((train_data$Appliances - exp(predict(model, train_data))) ^ 2))
+    test_rmse = sqrt(mean((test_data$Appliances - exp(predict(model, test_data))) ^ 2)) 
+  }
+  else{
+  train_rmse = sqrt(mean(resid(model) ^ 2))
+  test_rmse = sqrt(mean((test_data$Appliances - predict(model, test_data)) ^ 2)) 
+  }
+  
+  adj_rsq = summary(model)$adj.r.squared
+  loocv_rmse = sqrt(mean((resid(model) / (1 - hatvalues(model))) ^ 2))
+  num_params = length(coef(model))
+  
+  # Shapiro-Wilk Test. It works for 5000 rows only
+  shapiro_p_val = shapiro.test(resid(model)[0:5000])$p.value
+  shapiro_decision = ifelse(shapiro_p_val < alpha, "Reject", "Fail to Reject")
+  
+  # Breusch-Pagan test
+  bp_p_val = bptest(model)$p.value
+  bp_decision = ifelse(bp_p_val < alpha, "Reject", "Fail to Reject")
+
+  new_df = data.frame(ModelName = model_name,
+                      AdjRSq = adj_rsq,
+                      LOOCVRMSE = loocv_rmse,
+                      TrainRMSE = train_rmse,
+                      TestRMSE = test_rmse,
+                      ParCount = num_params,
+                      ShapiroPVal = shapiro_p_val,
+                      BPPval = bp_p_val
+  )
+  
+  metrics_df = rbind(metrics_df, new_df)
+}
+
+plot_fitvsresid = function(model, pcol = "grey", lcol = "dodgerblue"){
+  # Fitted vs Residuals plot
+  plot(fitted(model), resid(model), 
+       col = pcol, 
+       pch = 20,
+       xlab = "Fitted",
+       ylab = "Residuals",
+       main = "Fitted versus Residuals")
+  abline(h = 0, col = lcol, lwd = 2)
+}
+
+metrics_df = calculate_metrics(add_md, train, test, model_name = "Additive model")
+metrics_df = calculate_metrics(add_md_key, train, test, log = TRUE, model_name = "Additive model with key parameters")
+metrics_df = calculate_metrics(int_md_key, train, test, log = TRUE, model_name = "Interaction model")
+metrics_df = calculate_metrics(int_md_key_bic, train, test, log = TRUE, model_name = "Interaction model with backwards AIC")
+metrics_df = calculate_metrics(int_md_2_way, train, test, log = TRUE, model_name = "Two way interaction model")
+
+colnames(metrics_df) = c("Model", "Adj. R Squared","LOOCV RMSE", "Train RMSE", "Test RMSE", "Parameter Count", "Shapiro p-val", "BP p-val")
+
+knitr::kable(metrics_df, "simple")
+
+```
+
+## Discussion
+
+The chosen model from the above table was the “additive model with key parameters.” The model transformed the response variable by using the natural logarithm. Though the $R^2$ value was only about 0.3, which is lower than some of the other models, the number of parameters were significantly less. This was only marginally better than a pure additive model; however, the reduction of 10 parameters improves the ability to explain and comprehend the model. 
+
+Accurately predicting appliance energy consumption proved to be very challenging. The statistical models with the highest $R^2$ values ended up being extremely large models with more than 1000 different parameters. These extremely large models ended up overfitting the data, and are likely not great models to predict future energy consumption.
+
+A particular struggle of all the models that we developed was predicting observations when the appliance energy consumption was very high. The accuracy of predicting low energy consumption was much better. In general, the developed statistical models were unable to predict when appliance energy consumption was above 350, and almost 5% of the observations had values above 350. These observations above 350 must have been when a high number of appliances were in use, or there was an abnormal amount of energy consumed by a particular appliance. 
+
+Below is a plot of predicted vs actual. This shows the model's inability to predict when the energy consumption is very large.
+
+```{r}
+pred_data = exp(predict(add_md_key, newdata=test))
+plot(pred_data, test$Appliances, pch = 20,
+     xlab = "Predicted", ylab = "Actual", main = "Predicted vs Actual")
+abline(0,1,col="red")
+```
+
+The distribution of energy appliance data is very skewed to the right. This made predicting appliance data challenging. We greatly improved the statistical models through transforming response variables. We used both the normal log transform of the response variable, as well as using the Box-Cox method. The $R^2$ increased by around 10% through transforming the response variable alone. 
+
+The selected model did not have a high enough $R^2$ value that would make reliable predictions of future energy consumption; however, the model did provide some insights that can be useful. In particular, temperature, humidity, and time of the day play an important role in energy consumption. We found these variables to be the most significant. 
+
+The appliance variable is modeled as continuous; however, the measurements were only in increments of 10. This is a source of the problem with the residual plots that show a pattern. If we were able to get more granular measurements, that could have also improved the model.
+
+## Appendix
+
+**What is Available Online:**
+
+As a quality control process in our project, we briefly went through several existing projects on this Appliances data.
+Please note, the projects we found were not in the format or scope that we were doing. Most of these projects try to use machine learning packages to fit the data. While our project is to explore the data and use the knowledge we learned in STAT420 to get a model.
+For example, in a [post](https://www.kaggle.com/rrakzz/r2-68-accuracy-95) the author fitted the data with various techniques. They could not get a good model from simple linear regression and SVR. However, a somewhat better model was found using the **Random Forest Regression** method, which is new to us. With the Random Forest Regression model, the $R^2$ can be as much as 0.67; however, the author failed to mention the other important metrics, like the number of predictors and the normality test result. Because of this lack of information, we cannot compare our best model with this machine learning model.
+After surveying several projects on the same data, we think the take-away is:
+
+  - All available numerical predictors have low correlation with the response `Appliances`
+  
+  - If we extract the attribute `hour` from the time stamp, it will be the most influential predictor
+  
+  - High $R^2$ (~65%) can be achieved with fancy machine learning techniques; however, it is not clear how these models would perform under our diagnostic tests.
+
+**Authors:**
+
+Reported authored by Haixu Leng, Dilip Ravindran, Justin Ward, and Alex Zurawski.
